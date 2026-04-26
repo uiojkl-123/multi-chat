@@ -1,0 +1,154 @@
+    Updating crates.io index
+     Locking 86 packages to latest compatible versions
+ Downloading crates ...
+  Downloaded anstyle v1.0.14
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded itoa v1.0.18
+  Downloaded windows-link v0.2.1
+  Downloaded scopeguard v1.2.0
+  Downloaded tokio-macros v2.7.0
+  Downloaded zmij v1.0.21
+  Downloaded tracing-log v0.2.0
+  Downloaded unicode-ident v1.0.24
+  Downloaded socket2 v0.6.3
+  Downloaded serde v1.0.228
+  Downloaded mio v1.2.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded memchr v2.8.0
+  Downloaded num-traits v0.2.19
+  Downloaded tracing-subscriber v0.3.23
+  Downloaded serde_json v1.0.149
+  Downloaded blake3 v1.8.5
+  Downloaded clap_builder v4.6.0
+  Downloaded bytes v1.11.1
+  Downloaded syn v2.0.117
+  Downloaded chrono v0.4.44
+  Downloaded tracing-core v0.1.36
+  Downloaded tracing-attributes v0.1.31
+  Downloaded sharded-slab v0.1.7
+  Downloaded serde_derive v1.0.228
+  Downloaded serde_core v1.0.228
+  Downloaded parking_lot_core v0.9.12
+  Downloaded log v0.4.29
+  Downloaded clap v4.6.1
+  Downloaded cc v1.2.61
+  Downloaded tracing v0.1.44
+  Downloaded anyhow v1.0.102
+  Downloaded smallvec v1.15.1
+  Downloaded parking_lot v0.12.5
+  Downloaded nu-ansi-term v0.50.3
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded constant_time_eq v0.4.2
+  Downloaded autocfg v1.5.0
+  Downloaded pin-project-lite v0.2.17
+  Downloaded once_cell v1.21.4
+  Downloaded lock_api v0.4.14
+  Downloaded clap_derive v4.6.1
+  Downloaded anstyle-query v1.1.5
+  Downloaded thread_local v1.1.9
+  Downloaded strsim v0.11.1
+  Downloaded once_cell_polyfill v1.70.2
+  Downloaded utf8parse v0.2.2
+  Downloaded quote v1.0.45
+  Downloaded lazy_static v1.5.0
+  Downloaded clap_lex v1.1.0
+  Downloaded arrayvec v0.7.6
+  Downloaded tokio v1.52.1
+  Downloaded heck v0.5.0
+  Downloaded cpufeatures v0.3.0
+  Downloaded colorchoice v1.0.5
+  Downloaded arrayref v0.3.9
+  Downloaded anstyle-wincon v3.0.11
+  Downloaded anstream v1.0.0
+  Downloaded anstyle-parse v1.0.0
+  Downloaded windows-sys v0.61.2
+   Compiling windows-link v0.2.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling cfg-if v1.0.4
+   Compiling serde_core v1.0.228
+   Compiling autocfg v1.5.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling utf8parse v0.2.2
+   Compiling zmij v1.0.21
+   Compiling anstyle v1.0.14
+   Compiling windows-sys v0.61.2
+   Compiling once_cell v1.21.4
+   Compiling smallvec v1.15.1
+   Compiling serde v1.0.228
+   Compiling once_cell_polyfill v1.70.2
+   Compiling parking_lot_core v0.9.12
+   Compiling tracing-core v0.1.36
+   Compiling anstyle-parse v1.0.0
+   Compiling serde_json v1.0.149
+   Compiling num-traits v0.2.19
+   Compiling cc v1.2.61
+   Compiling colorchoice v1.0.5
+   Compiling anyhow v1.0.102
+   Compiling scopeguard v1.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling lock_api v0.4.14
+   Compiling itoa v1.0.18
+   Compiling arrayvec v0.7.6
+   Compiling cpufeatures v0.3.0
+   Compiling bytes v1.11.1
+   Compiling heck v0.5.0
+   Compiling lazy_static v1.5.0
+   Compiling log v0.4.29
+   Compiling pin-project-lite v0.2.17
+   Compiling memchr v2.8.0
+   Compiling syn v2.0.117
+   Compiling strsim v0.11.1
+   Compiling constant_time_eq v0.4.2
+   Compiling arrayref v0.3.9
+   Compiling clap_lex v1.1.0
+   Compiling tracing-log v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling parking_lot v0.12.5
+   Compiling thread_local v1.1.9
+   Compiling blake3 v1.8.5
+   Compiling anstyle-wincon v3.0.11
+   Compiling anstyle-query v1.1.5
+   Compiling nu-ansi-term v0.50.3
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.3
+   Compiling anstream v1.0.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling clap_builder v4.6.0
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio-macros v2.7.0
+   Compiling tokio v1.52.1
+   Compiling tracing v0.1.44
+   Compiling clap v4.6.1
+   Compiling chrono v0.4.44
+   Compiling protocol v0.1.0 (C:\Users\ybg51\multi-chat\crates\protocol)
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `tokio`
+ --> crates\protocol\src\lib.rs:3:5
+  |
+3 | use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  |     ^^^^^ use of unresolved module or unlinked crate `tokio`
+  |
+  = help: if you wanted to use a crate named `tokio`, use `cargo add tokio` to add it to your `Cargo.toml`
+
+warning: unused imports: `BufMut`, `Buf`, and `BytesMut`
+ --> crates\protocol\src\lib.rs:2:13
+  |
+2 | use bytes::{BytesMut, Buf, BufMut};
+  |             ^^^^^^^^  ^^^  ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::io`
+ --> crates\protocol\src\lib.rs:4:5
+  |
+4 | use std::io;
+  |     ^^^^^^^
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `protocol` (lib) generated 2 warnings
+error: could not compile `protocol` (lib) due to 1 previous error; 2 warnings emitted
+warning: build failed, waiting for other jobs to finish...

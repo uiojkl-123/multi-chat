@@ -101,15 +101,27 @@ impl App {
     fn handle_incoming(&mut self, msg: Message) {
         match msg {
             Message::Chat { from, body, ts, hash, .. } => {
+                // The server in older revisions echoes a sender's own
+                // messages back to them. Drop the duplicate — we already
+                // rendered it locally on send.
+                if from == self.name {
+                    return;
+                }
                 let ok = Message::calculate_body_hash(&body) == hash;
                 self.peers.insert(from.clone());
                 self.entries.push(Entry::Chat { from, body, ts, own: false, integrity_ok: ok });
             }
             Message::Join { client_id } => {
+                if client_id == self.name {
+                    return;
+                }
                 self.peers.insert(client_id.clone());
                 self.entries.push(Entry::Join { who: client_id, ts: now_ms() });
             }
             Message::Leave { client_id } => {
+                if client_id == self.name {
+                    return;
+                }
                 self.peers.remove(&client_id);
                 self.entries.push(Entry::Leave { who: client_id, ts: now_ms() });
             }

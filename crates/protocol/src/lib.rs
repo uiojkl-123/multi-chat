@@ -1,8 +1,8 @@
+use anyhow::{anyhow, Result};
+use bytes::{Buf, BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
-use bytes::{BytesMut, Buf, BufMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::io;
-use anyhow::{Result, anyhow};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -42,7 +42,8 @@ pub async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Messa
     reader.read_exact(&mut len_buf).await?;
 
     let len = u32::from_be_bytes(len_buf) as usize;
-    if len > 10 * 1024 * 1024 { // 10MB limit to prevent DoS
+    if len > 10 * 1024 * 1024 {
+        // 10MB limit to prevent DoS
         return Err(anyhow!("Frame too large: {} bytes", len));
     }
 
@@ -62,4 +63,48 @@ pub async fn write_frame<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &Message
     writer.flush().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn body_hash_matches_blake3_hex() {
+        let body = "hello multi-chat";
+        let expected = blake3::hash(body.as_bytes()).to_hex().to_string();
+
+        assert_eq!(Message::calculate_body_hash(body), expected);
+    }
+
+    #[tokio::test]
+    async fn frame_round_trips_chat_message() {
+        let message = Message::Chat {
+            msg_id: "client-1-1".to_string(),
+            from: "client-1".to_string(),
+            ts: 1_737_270_000_123,
+            hash: Message::calculate_body_hash("hello"),
+            body: "hello".to_string(),
+        };
+        let (mut writer, mut reader) = tokio::io::duplex(1024);
+
+        write_frame(&mut writer, &message).await.unwrap();
+        drop(writer);
+
+        let decoded = read_frame(&mut reader).await.unwrap();
+        assert_eq!(decoded, message);
+    }
+
+    #[tokio::test]
+    async fn oversized_frame_is_rejected_before_payload_read() {
+        let too_large = 10 * 1024 * 1024 + 1u32;
+        let (mut writer, mut reader) = tokio::io::duplex(4);
+
+        writer.write_all(&too_large.to_be_bytes()).await.unwrap();
+        drop(writer);
+
+        let err = read_frame(&mut reader).await.unwrap_err();
+        assert!(err.to_string().contains("Frame too large"));
+    }
 }

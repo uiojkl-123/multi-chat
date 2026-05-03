@@ -13,3 +13,8 @@ tracing-subscriber = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
+unicode-width = "0.1"

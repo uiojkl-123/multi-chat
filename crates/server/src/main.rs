@@ -15,6 +15,10 @@ struct Args {
     addr: String,
 }
 
+// Broadcast payload pairs each message with the connection id of the sender,
+// so the writer task can skip echoing the message back to its origin.
+type BroadcastMessage = (u64, Message);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -24,8 +28,11 @@ async fn main() -> Result<()> {
     info!("Starting Multi-Chat Server on {}", addr);
 
     // Broadcast channel: Buffer size 1024 to handle spikes.
-    let (tx, _rx) = broadcast::channel::<Message>(1024);
-    let tx = std::sync::Arc::new(tx);
+    let (tx, _rx) = broadcast::channel::<BroadcastMessage>(1024);
+    let tx = Arc::new(tx);
+
+    // Per-connection identifier used to filter the sender out of the broadcast.
+    let next_conn_id = Arc::new(AtomicU64::new(0));
 
     // Throughput monitoring: Atomic counter and sampling task
     let msg_counter = Arc::new(AtomicU64::new(0));
@@ -46,19 +53,25 @@ async fn main() -> Result<()> {
 
     loop {
         let (socket, peer_addr) = listener.accept().await.context("Failed to accept connection")?;
-        info!("New connection from {}", peer_addr);
+        let conn_id = next_conn_id.fetch_add(1, Ordering::Relaxed);
+        info!("New connection from {} (conn_id={})", peer_addr, conn_id);
 
         let tx = tx.clone();
         let msg_counter = msg_counter.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, tx, msg_counter).await {
+            if let Err(e) = handle_connection(socket, conn_id, tx, msg_counter).await {
                 error!("Error handling connection from {}: {:?}", peer_addr, e);
             }
         });
     }
 }
 
-async fn handle_connection(socket: TcpStream, tx: std::sync::Arc<broadcast::Sender<Message>>, msg_counter: Arc<AtomicU64>) -> Result<()> {
+async fn handle_connection(
+    socket: TcpStream,
+    conn_id: u64,
+    tx: Arc<broadcast::Sender<BroadcastMessage>>,
+    msg_counter: Arc<AtomicU64>,
+) -> Result<()> {
     let (reader, writer) = socket.into_split();
 
     // --- Writer Task: Broadcast Channel -> Socket ---
@@ -67,7 +80,13 @@ async fn handle_connection(socket: TcpStream, tx: std::sync::Arc<broadcast::Send
         let mut writer = writer;
         loop {
             match rx.recv().await {
-                Ok(msg) => {
+                Ok((sender_conn_id, msg)) => {
+                    // Skip messages that originated from this same connection so
+                    // each client only receives messages from its peers. This
+                    // matches the verification policy in README 4-2.
+                    if sender_conn_id == conn_id {
+                        continue;
+                    }
                     if let Err(e) = write_frame(&mut writer, &msg).await {
                         warn!("Failed to write frame to client: {:?}", e);
                         break;
@@ -95,12 +114,12 @@ async fn handle_connection(socket: TcpStream, tx: std::sync::Arc<broadcast::Send
                         info!("Client {} joined the chat", id);
                         client_id = Some(id.clone());
                         // Broadcast the join event to all other clients
-                        let _ = tx.send(msg);
+                        let _ = tx.send((conn_id, msg));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                     }
                     Message::Leave { client_id: id } => {
                         info!("Client {} left the chat", id);
-                        let _ = tx.send(msg);
+                        let _ = tx.send((conn_id, msg));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                         break;
                     }
@@ -110,7 +129,7 @@ async fn handle_connection(socket: TcpStream, tx: std::sync::Arc<broadcast::Send
                             warn!("Received message from unregistered client. Dropping.");
                             continue;
                         }
-                        let _ = tx.send(msg);
+                        let _ = tx.send((conn_id, msg));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -125,7 +144,7 @@ async fn handle_connection(socket: TcpStream, tx: std::sync::Arc<broadcast::Send
     // Cleanup: if the client disconnected without a Leave message
     if let Some(id) = client_id {
         info!("Client {} disconnected unexpectedly", id);
-        let _ = tx.send(Message::Leave { client_id: id });
+        let _ = tx.send((conn_id, Message::Leave { client_id: id }));
     }
 
     // Stop the writer task by aborting it

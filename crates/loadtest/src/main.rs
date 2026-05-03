@@ -2,10 +2,10 @@ use anyhow::{Result, Context};
 use clap::{Parser};
 use protocol::{Message, read_frame, write_frame};
 use tokio::net::TcpStream;
-use tokio::time::{sleep, Duration};
+use tokio::time::{interval, Duration, MissedTickBehavior};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use tracing::{info, error, warn};
+use tracing::{info, error};
 use tracing_subscriber;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,18 +14,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct Args {
     #[arg(short, long, default_value = "127.0.0.1:9000")]
     addr: String,
-    #[arg(short, long, default_value = "500")]
-    clients: usize,
-    #[arg(short, long, default_value = "1")]
-    rate: u64, // messages per second per client
-    #[arg(short, long, default_value = "60")]
-    duration: u64, // seconds
+    /// Number of concurrent clients. Must be >= 2 (loss rate is undefined for a single client).
+    #[arg(short, long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(2..))]
+    clients: u32,
+    /// Messages per second per client. Must be >= 1.
+    #[arg(short, long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    rate: u64,
+    /// Test duration in seconds.
+    #[arg(short, long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
+    duration: u64,
 }
 
 struct ClientStats {
     sent: u64,
     received: u64,
-    lost: u64,
     errors: u64,
     latencies: Vec<u128>,
 }
@@ -35,7 +37,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
     let addr = args.addr.clone();
-    let clients_count = args.clients;
+    let clients_count = args.clients as usize;
     let rate = args.rate;
     let duration = args.duration;
 
@@ -89,7 +91,6 @@ async fn run_client(
     let stats_local = Arc::new(Mutex::new(ClientStats {
         sent: 0,
         received: 0,
-        lost: 0,
         errors: 0,
         latencies: Vec::new(),
     }));
@@ -100,22 +101,18 @@ async fn run_client(
         loop {
             match read_frame(&mut reader).await {
                 Ok(msg) => {
-                    match &msg {
-                        Message::Chat { body, hash, ts, .. } => {
-                            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                            let latency = now.saturating_sub(*ts as u128);
+                    if let Message::Chat { body, hash, ts, .. } = &msg {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                        let latency = now.saturating_sub(*ts as u128);
 
-                            let computed_hash = protocol::Message::calculate_body_hash(body);
-                            if computed_hash == *hash {
-                                let mut s = stats_recv.lock().unwrap();
-                                s.received += 1;
-                                s.latencies.push(latency);
-                            } else {
-                                let mut s = stats_recv.lock().unwrap();
-                                s.errors += 1;
-                            }
+                        let computed_hash = protocol::Message::calculate_body_hash(body);
+                        let mut s = stats_recv.lock().unwrap();
+                        if computed_hash == *hash {
+                            s.received += 1;
+                            s.latencies.push(latency);
+                        } else {
+                            s.errors += 1;
                         }
-                        _ => {}
                     }
                 }
                 Err(_) => break,
@@ -123,12 +120,20 @@ async fn run_client(
         }
     });
 
-    // Sender loop
-    let start_time = SystemTime::now();
-    let mut seq = 0u64;
-    let interval = Duration::from_millis(1000 / rate);
+    // Sender loop. Use a tick interval rather than `sleep(interval)` so that
+    // per-message work doesn't accumulate into rate drift.
+    let start = tokio::time::Instant::now();
+    let total = Duration::from_secs(duration);
+    let mut ticker = interval(Duration::from_millis(1000 / rate));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    while start_time.elapsed().unwrap().as_secs() < duration {
+    let mut seq = 0u64;
+    while start.elapsed() < total {
+        ticker.tick().await;
+        if start.elapsed() >= total {
+            break;
+        }
+
         seq += 1;
         let msg_id = format!("{}-{}", client_id, seq);
         let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
@@ -143,30 +148,31 @@ async fn run_client(
             body,
         };
 
-        if let Err(_) = write_frame(&mut writer, &chat_msg).await {
+        if write_frame(&mut writer, &chat_msg).await.is_err() {
             break;
         }
 
-        {
-            let mut s = stats_local.lock().unwrap();
-            s.sent += 1;
-        }
-
-        sleep(interval).await;
+        stats_local.lock().unwrap().sent += 1;
     }
 
+    // Notify the server we're leaving so it can broadcast the Leave event,
+    // then give the receiver a brief grace period to drain in-flight frames
+    // before tearing the task down.
+    let _ = write_frame(&mut writer, &Message::Leave { client_id: client_id.to_string() }).await;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    rx_task.abort();
+
     // Final stats merge
-    let mut global_stats = stats.lock().unwrap();
     let local = stats_local.lock().unwrap();
+    let mut global_stats = stats.lock().unwrap();
     global_stats.insert(id, ClientStats {
         sent: local.sent,
         received: local.received,
-        lost: local.lost,
         errors: local.errors,
         latencies: local.latencies.clone(),
     });
 
-    rx_task.abort();
     Ok(())
 }
 
@@ -202,11 +208,12 @@ fn report_results(stats_map: &Arc<Mutex<HashMap<usize, ClientStats>>>, total_cli
         println!("Latency: N/A");
     }
 
-    if total_sent > 0 {
-        // Loss Rate = (Total Sent - Avg Received per Client) / Total Sent
-        let avg_received = total_received as f64 / (total_clients as f64 - 1.0);
-        let loss_rate = (1.0 - (avg_received / total_sent as f64)) * 100.0;
-        println!("Loss Rate: {:.2}%", loss_rate);
+    // Each sent message is expected to reach (total_clients - 1) peers,
+    // since the sender doesn't receive its own message back.
+    if total_sent > 0 && total_clients >= 2 {
+        let expected_received = total_sent * (total_clients as u64 - 1);
+        let loss_rate = (1.0 - (total_received as f64 / expected_received as f64)) * 100.0;
+        println!("Loss Rate: {:.2}% (received {} / expected {})", loss_rate, total_received, expected_received);
     } else {
         println!("Loss Rate: N/A");
     }

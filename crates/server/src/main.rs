@@ -1,12 +1,14 @@
 use anyhow::{Result, Context};
 use clap::{Parser};
-use protocol::{Message, read_frame, write_frame};
+use protocol::{Message, read_frame};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 use tracing::{info, error, warn};
 use tracing_subscriber;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use bytes::Bytes;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, bin_name = "multi-chat-server")]
@@ -15,9 +17,9 @@ struct Args {
     addr: String,
 }
 
-// Broadcast payload pairs each message with the connection id of the sender,
-// so the writer task can skip echoing the message back to its origin.
-type BroadcastMessage = (u64, Message);
+// Pre-serialized frame paired with the originating connection id, so the
+// writer task can both skip echoing back to the sender and avoid re-encoding.
+type BroadcastFrame = (u64, Arc<Bytes>);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,7 +30,7 @@ async fn main() -> Result<()> {
     info!("Starting Multi-Chat Server on {}", addr);
 
     // Broadcast channel: Buffer size 1024 to handle spikes.
-    let (tx, _rx) = broadcast::channel::<BroadcastMessage>(1024);
+    let (tx, _rx) = broadcast::channel::<BroadcastFrame>(1024);
     let tx = Arc::new(tx);
 
     // Per-connection identifier used to filter the sender out of the broadcast.
@@ -66,10 +68,18 @@ async fn main() -> Result<()> {
     }
 }
 
+fn encode_frame(msg: &Message) -> Result<Arc<Bytes>> {
+    let payload = serde_json::to_vec(msg)?;
+    let mut frame = Vec::with_capacity(payload.len() + 4);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(Arc::new(Bytes::from(frame)))
+}
+
 async fn handle_connection(
     socket: TcpStream,
     conn_id: u64,
-    tx: Arc<broadcast::Sender<BroadcastMessage>>,
+    tx: Arc<broadcast::Sender<BroadcastFrame>>,
     msg_counter: Arc<AtomicU64>,
 ) -> Result<()> {
     let (reader, writer) = socket.into_split();
@@ -80,14 +90,15 @@ async fn handle_connection(
         let mut writer = writer;
         loop {
             match rx.recv().await {
-                Ok((sender_conn_id, msg)) => {
+                Ok((sender_conn_id, bytes)) => {
                     // Skip messages that originated from this same connection so
                     // each client only receives messages from its peers. This
                     // matches the verification policy in README 4-2.
                     if sender_conn_id == conn_id {
                         continue;
                     }
-                    if let Err(e) = write_frame(&mut writer, &msg).await {
+                    // Write the pre-serialized frame: [4 bytes length][JSON payload]
+                    if let Err(e) = writer.write_all(&bytes).await {
                         warn!("Failed to write frame to client: {:?}", e);
                         break;
                     }
@@ -113,23 +124,24 @@ async fn handle_connection(
                     Message::Join { client_id: id } => {
                         info!("Client {} joined the chat", id);
                         client_id = Some(id.clone());
-                        // Broadcast the join event to all other clients
-                        let _ = tx.send((conn_id, msg));
+                        let frame = encode_frame(&msg)?;
+                        let _ = tx.send((conn_id, frame));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                     }
                     Message::Leave { client_id: id } => {
                         info!("Client {} left the chat", id);
-                        let _ = tx.send((conn_id, msg));
+                        let frame = encode_frame(&msg)?;
+                        let _ = tx.send((conn_id, frame));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                         break;
                     }
                     _ => {
-                        // For Chat, Ack, Sys messages, simply broadcast them
                         if client_id.is_none() {
                             warn!("Received message from unregistered client. Dropping.");
                             continue;
                         }
-                        let _ = tx.send((conn_id, msg));
+                        let frame = encode_frame(&msg)?;
+                        let _ = tx.send((conn_id, frame));
                         msg_counter.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -141,13 +153,13 @@ async fn handle_connection(
         }
     }
 
-    // Cleanup: if the client disconnected without a Leave message
     if let Some(id) = client_id {
         info!("Client {} disconnected unexpectedly", id);
-        let _ = tx.send((conn_id, Message::Leave { client_id: id }));
+        let leave_msg = Message::Leave { client_id: id };
+        let frame = encode_frame(&leave_msg)?;
+        let _ = tx.send((conn_id, frame));
     }
 
-    // Stop the writer task by aborting it
     writer_handle.abort();
 
     Ok(())

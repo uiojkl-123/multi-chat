@@ -19,7 +19,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::Stdout,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -72,6 +72,10 @@ struct App {
     connected: bool,
     peers: HashSet<String>,
     seq: u64,
+    // Last received sequence number per peer, parsed from the trailing
+    // segment of `msg_id` (`{from}-{seq}`). Used to detect broadcast gaps
+    // (e.g. a slow client being lagged by the server's bounded channel).
+    peer_sequences: HashMap<String, u64>,
 }
 
 impl App {
@@ -88,6 +92,7 @@ impl App {
             connected: false,
             peers: me,
             seq: 0,
+            peer_sequences: HashMap::new(),
         }
     }
 
@@ -100,7 +105,7 @@ impl App {
 
     fn handle_incoming(&mut self, msg: Message) {
         match msg {
-            Message::Chat { from, body, ts, hash, .. } => {
+            Message::Chat { msg_id, from, body, ts, hash } => {
                 // The server in older revisions echoes a sender's own
                 // messages back to them. Drop the duplicate — we already
                 // rendered it locally on send.
@@ -109,6 +114,26 @@ impl App {
                 }
                 let ok = Message::calculate_body_hash(&body) == hash;
                 self.peers.insert(from.clone());
+
+                // Sequence verification: msg_id is `{from}-{seq}`. Compare
+                // against the last seq seen from this peer; a non-contiguous
+                // jump means the server (or our subscription) dropped frames.
+                if let Some(seq_str) = msg_id.rsplit('-').next() {
+                    if let Ok(current_seq) = seq_str.parse::<u64>() {
+                        let last_seq = self.peer_sequences.get(&from).copied().unwrap_or(0);
+                        if last_seq != 0 && current_seq != last_seq + 1 {
+                            let missing = current_seq.saturating_sub(last_seq).saturating_sub(1);
+                            self.push_error(format!(
+                                "gap from {from}: expected seq {}, got {} (missing {} message(s))",
+                                last_seq + 1,
+                                current_seq,
+                                missing,
+                            ));
+                        }
+                        self.peer_sequences.insert(from.clone(), current_seq);
+                    }
+                }
+
                 self.entries.push(Entry::Chat { from, body, ts, own: false, integrity_ok: ok });
             }
             Message::Join { client_id } => {

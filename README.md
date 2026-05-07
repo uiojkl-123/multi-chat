@@ -214,10 +214,49 @@ cargo run -p loadtest --release -- \
 
 위 예시는 500명의 클라이언트가 초당 1개 메시지를 60초 동안 전송하는 테스트다.
 
+### 6-5. 결과 보고서 자동 생성 (개선 전/후 비교)
+
+`bench/` 디렉터리에 §5-2의 시나리오를 자동으로 돌리고, 개선 전/후 결과를 합쳐 마크다운 보고서로 만들어주는 PowerShell 스크립트가 들어 있다.
+
+먼저 베이스라인을 측정한다 (서버는 스크립트가 직접 띄웠다 내림).
+
+```powershell
+.\bench\run-scenarios.ps1 -Label baseline
+```
+
+이후 서버/프로토콜을 개선하고 다시 측정한다.
+
+```powershell
+.\bench\run-scenarios.ps1 -Label improved
+```
+
+각 실행은 `bench\results\<라벨>-<시나리오ID>.json` 형식으로 결과를 남긴다. 두 라벨이 다 모이면 비교 보고서를 만든다.
+
+```powershell
+.\bench\build-report.ps1 -Baseline baseline -Improved improved
+# -> bench\results\report.md
+```
+
+보고서는 시나리오별 요약 표(P50/P95/P99/Loss/오류의 baseline → improved Δ)와 각 시나리오의 상세 표를 포함한다. 그대로 결과 보고서에 붙여 넣을 수 있다.
+
+옵션:
+
+- `-Scenarios S1,S2` : 일부 시나리오만 돌리기 (기본은 S1~S4 전부)
+- `-KeepServer`     : 이미 띄워둔 서버를 사용하고 스크립트가 서버를 건드리지 않게 함
+- `-Addr 127.0.0.1:9000` : 서버 주소 (기본 동일)
+
+`loadtest` 바이너리 자체에도 `--output text|json|md` 와 `--label <name>` 옵션이 추가되어 있어, 스크립트 없이 단발 측정을 보고서용으로 뽑고 싶다면 직접 호출해도 된다.
+
+```powershell
+cargo run -p loadtest --release -- `
+    --addr 127.0.0.1:9000 --clients 500 --rate 1 --duration 60 `
+    --output md --label improved-S2
+```
+
 ---
 
 ## 7. 산출물
 
 - 서버 / 클라이언트 / 부하 테스트 도구 소스 코드
 - 500명 시연 영상 또는 스크린샷
-- 성능 테스트 결과 및 개선 과정 보고서 (구현 완료 후 별도 작성)
+- 성능 테스트 결과 및 개선 과정 보고서 (`bench\results\report.md` — `bench\` 스크립트로 자동 생성)
